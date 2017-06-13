@@ -1,0 +1,203 @@
+#include <msp430.h>
+#include <stdint.h>
+#include <string.h>
+
+
+int keypressed;									//inputs the value of inputed code into the Array
+int i, c, x, z, row, keyflag,count;
+char inputcode[10];								//array for the inputed code
+char pass[] = "0000";				// preset code
+
+int temp, temproom;
+int ADCReading [1];
+
+// Function Prototypes
+void ConfigureAdc(void);
+void getanalogvalues();
+int comparecode();
+void servo_door_close();
+void servo_door_open();
+void input_code(char);
+char keymap_char[16] = {'1', '2', '3', 'A',
+                                         '4', '5', '6', 'B',
+                                         '7', '8', '9', 'C',
+                                         '*', '0', '#', 'D'};
+
+void main(void)
+{
+WDTCTL = WDTPW + WDTHOLD; 	//Stop watchdog timer
+
+P1OUT = 0;
+P2OUT = 0;
+P1DIR = 0;
+P1REN = 0;
+P2REN = 0;
+P2DIR = 0;
+P1DIR = 0;			// Set all pins as inputs   // pins 0, 1, 2, 3 of port 1 read values from the columns of the numpads
+P2OUT  = 0x00;							// clear P2Out output
+
+
+P2DIR |= (BIT0 | BIT1 | BIT2 | BIT3 );			//set as output for the KEYPAD_ROWS 2.0-3
+P2DIR |= (BIT4);								// set bit  2.4    as outputs Temp LED
+P1DIR |= BIT3;  	// PRI LED
+
+
+/*INTERRUPT BEING SET UP FOR THE INPUTS ON P1*/
+
+P1REN |= (BIT4 | BIT5 | BIT6 | BIT7 ); 			//enables resistor on the button pin
+P1OUT |= (BIT4 | BIT5 | BIT6 | BIT7 ); 			//make that a pull up
+P1IES |= (BIT4 | BIT5 | BIT6 | BIT7 ); 			//interrupt edge select, hi to lo
+P1IE  |= (BIT4 | BIT5 | BIT6 | BIT7 ); 			//enable interrupt on selected pin
+
+
+
+/*PWM Set UP */
+
+	P2DIR |= BIT5;					// P2.5 set as output
+	P2SEL |= BIT5;					// P2.5 selected Timer1_A Out2
+
+
+	P1IES &= ~BIT1; // low-high edge initially
+	P1IFG &= ~BIT1; // prevent immediate interrupt
+	P1IE |= BIT1; // enable interrupts on P1.5
+
+__enable_interrupt(); 		//enable interrupts get
+
+
+ConfigureAdc();
+	// reading the initial room value temproom
+	__delay_cycles(250);
+	getanalogvalues();
+	temproom = temp;
+	__delay_cycles(250);
+
+for(;;){
+	getanalogvalues();
+	if(temp >= 1.03 * temproom && temp <= 1.05 * temproom) {}
+	else if (temp > 1.05 * temproom) {P2OUT |=  BIT4; __delay_cycles(200);}
+	if (temp < 1.03 * temproom) {P2OUT &= ~BIT4; __delay_cycles(200);}
+
+	if (x == 1){servo_door_open();}
+	if(keyflag == 1){
+		if(keypressed == 8){servo_door_close();}
+		else if (keypressed == 4){if (z == 0){z = 1;}else{z = 0;}}
+		else if (keypressed == 12){TA1CTL &= ~(TASSEL_2 + ID_0 + MC_1);}
+		else if(keypressed == 15){comparecode();}
+		else if(keypressed == 13){memset(inputcode, 0, sizeof(inputcode));count = 0;}		//clears the array  // array size need to be defined
+		else {input_code(keymap_char[keypressed-1]);}
+		keyflag = 0;}}
+		}
+
+int comparecode()
+{
+	if (x == 2)
+			{
+				z = 0;					// reset pass change flag to 0
+				for(i = 0; i < sizeof(inputcode); i++)					//checks pin 0-3
+				{ pass[i] = inputcode[i];}				//0 means that the input is not a correct password
+				memset(inputcode, 0, sizeof(inputcode));					//clears the array  // array size need to be defined
+				count = 0;	//resets inputed code
+				{return x = 0;}
+			}
+	 if(inputcode[sizeof(pass)] == '\0' )				// if input code is longer than the password itself
+	 {
+		 for(i = 0; i < sizeof(pass); i++)					//checks pin 0-3
+		 	 {if(inputcode[i] != pass[i]){return x = 0;}}					//0 means that the input is not a correct password
+		 memset(inputcode, 0, sizeof(inputcode));					//clears the array  // array size need to be defined
+		 count = 0;													//resets inputed code
+		 if (z == 1){return x = 2;}						// IF password is correct then we go to this if if not x = 0
+		 return x = 1;}										// return value go back to main loop   //correct code inputed open the door
+	 else{return x=0;}
+}
+
+void input_code(char in_code)
+{
+	inputcode[count] = in_code;				//Input code by the user
+	count ++;								//increase count or the the index for input array
+}
+
+void servo_door_close()
+{
+	TA1CCR0 = 20000;				// PWM Period
+	TA1CCTL2 = OUTMOD_7;			// TA1CCR1 output mode = reset/set
+	TA1CCR2 = 700;					// TA1CCR1 PWM duty cycle
+	TA1CTL = TASSEL_2 + MC_1;		// SMCLK, Up Mode (Counts to TA1CCR0)
+	TA1CCR2 = 700;				// PWM Period
+    x = 0;
+    __delay_cycles(1000);
+}
+
+void servo_door_open()
+{
+	TA1CCR0 = 20000;				// PWM Period
+	TA1CCTL2 = OUTMOD_7;			// TA1CCR1 output mode = reset/set
+	TA1CCR2 = 700;					// TA1CCR1 PWM duty cycle
+	TA1CTL = TASSEL_2 + MC_1;		// SMCLK, Up Mode (Counts to TA1CCR0)
+	TA1CCR2 = 2000;				// PWM Period
+    x = 0;
+    __delay_cycles(1000);
+}
+
+// Port 1 interrupt service routine
+#pragma vector = PORT1_VECTOR
+__interrupt void Port_1(void)
+{
+
+	if (((P1IFG & BIT4) == BIT4) || ((P1IFG & BIT5) == BIT5) || ((P1IFG & BIT6) == BIT6)|| ((P1IFG & BIT7) == BIT7))
+	{
+	P2OUT |= (BIT1 + BIT2 + BIT3 + BIT0);
+	uint32_t io_pins[4] = {BIT0, BIT1, BIT2, BIT3};
+	for(row = 0; row < 4; row++)
+		  {      P2OUT &= ~ io_pins[row];
+				 if ((P1IN&BIT4) == 0){ keypressed = row*4+1;}
+				 if ((P1IN&BIT5) == 0){ keypressed = row*4+2;}
+				 if ((P1IN&BIT6) == 0){ keypressed = row*4+3;}
+				 if ((P1IN&BIT7) == 0){ keypressed = row*4+4;}
+				 P2OUT |= io_pins[row];
+		  }
+	keyflag = 1;
+    P2OUT &= ~ (BIT1 + BIT2 + BIT3 + BIT0);			// Clear P2OUT if not interrupt bugs
+	}
+
+    if ((P1IFG & BIT1) == BIT1) { // if motion sensed
+    			    P1IFG &= ~BIT1; // clear interrupt flag
+    			    P1OUT ^= BIT3; // toggle LED1
+    			    P1IES ^= BIT1; // toggle edge
+    			    __delay_cycles(200);
+    			    P1IFG &=~BIT3;
+    			  }
+
+	P1IFG &= ~(BIT4 | BIT5 | BIT6 | BIT7);			//clear the  interrupts and goes back to main loop
+}		//END OF THE INTERUPT LOOP/FUNCTION
+
+void ConfigureAdc(void)
+{
+   ADC10CTL1 = INCH_0 | CONSEQ_1; 		      // A2 + A1 + A0, single sequence
+   ADC10CTL0 = ADC10SHT_2 | MSC | ADC10ON;
+   while (ADC10CTL1 & BUSY);
+   ADC10DTC1 = 0x01; 				      // 3 conversions
+   ADC10AE0 |= BIT0; 		      // ADC10 option select
+   __delay_cycles(200);
+}
+
+void getanalogvalues()
+{
+ i = 0; temp = 0; //light = 0; touch =0;                // set all analog values to zero
+	for(i=1; i<=5 ; i++)                          // read all three analog values 5 times each and average
+  {
+    ADC10CTL0 &= ~ENC;
+    while (ADC10CTL1 & BUSY);                         //Wait while ADC is busy
+    ADC10SA = (unsigned)&ADCReading[0]; 	      //RAM Address of ADC Data, must be reset every conversion
+    ADC10CTL0 |= (ENC | ADC10SC);                     //Start ADC Conversion
+    while (ADC10CTL1 & BUSY);                         //Wait while ADC is busy
+    temp += ADCReading[0];
+    __delay_cycles(200);
+  }
+ temp = temp/5;     // Average the 5 reading for the three variables
+}
+
+#pragma vector=ADC10_VECTOR
+__interrupt void ADC10_ISR(void)
+{
+	__bic_SR_register_on_exit(CPUOFF);
+}
